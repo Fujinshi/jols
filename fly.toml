@@ -1,0 +1,23 @@
+app = "hirako-bot"  # Ganti dengan nama unik
+
+[build]
+  [build.args]
+    PYTHON_VERSION = "3.11"
+
+[env]
+  # Environment variables (opsional, lebih aman)
+  # TAPI lebih baik tetap hardcode di script
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # Biar tetap hidup
+  auto_start_machines = true
+  min_machines_running = 1     # Jaga 1 instance tetap jalan
+
+[mounts]
+  source = "hirako_data"
+  destination = "/app/data"
+
+[processes]
+  app = "python bot.py"
