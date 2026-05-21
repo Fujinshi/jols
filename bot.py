@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-HIRAKO AUTO LIKE TIKTOK BOT - PERSISTENT OFFSET VERSION
-- No spam
-- Single shot langsung like sekali
-- Rate limit protection
-- Offset tersimpan (TIDAK BACA ULANG PESAN LAMA)
+HIRAKO AUTO LIKE TIKTOK BOT - GITHUB ACTIONS READY (FIXED)
+- Support GitHub Actions 24/7
+- Auto commit & save state
+- No spam - Single shot langsung like sekali
 """
 
 import requests
@@ -14,6 +13,8 @@ import json
 import os
 import threading
 import re
+import subprocess
+import sys
 from datetime import datetime
 from collections import deque
 from bs4 import BeautifulSoup
@@ -30,13 +31,24 @@ TELEGRAM_ADMIN_ID = 8440381121
 
 # File untuk menyimpan data
 LINKS_FILE = "links.txt"
-PREMIUM_PROXY_FILE = "proxy1.txt"
-PROXY_LOG_FILE = "used_proxies.json"
-PROXY_BLACKLIST_FILE = "blacklisted_proxies.json"
-OFFSET_FILE = "telegram_offset.json"  # FILE UNTUK MENYIMPAN OFFSET
+STATE_FILE = "bot_state.json"
+PROXY_FILE = "proxy1.txt"
+
+# GitHub config
+GITHUB_REPO = os.environ.get('GITHUB_REPOSITORY', '')
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+
+# Proxy list (tanpa file eksternal untuk GitHub)
+DEFAULT_PROXIES = [
+    "45.155.221.114:80",
+    "45.156.196.106:80", 
+    "194.113.111.126:80",
+    "103.152.232.156:80",
+    "139.162.78.109:3128",
+]
 
 # Rate limiting
-processed_messages = deque(maxlen=100)
+processed_messages = deque(maxlen=50)
 
 # User agents
 USER_AGENTS = [
@@ -45,40 +57,79 @@ USER_AGENTS = [
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/118.0.0.0',
 ]
 
-# ==================== PERSISTENT OFFSET ====================
-
-def save_offset(offset):
-    """Simpan offset ke file"""
-    try:
-        with open(OFFSET_FILE, 'w') as f:
-            json.dump({'offset': offset}, f)
-        return True
-    except:
-        return False
-
-def load_offset():
-    """Load offset dari file"""
-    if os.path.exists(OFFSET_FILE):
-        try:
-            with open(OFFSET_FILE, 'r') as f:
-                data = json.load(f)
-                return data.get('offset', 0)
-        except:
-            return 0
-    return 0
-
 # ==================== BANNER ====================
 
 def show_banner():
     banner = """
 \033[95m
 ╔══════════════════════════════════════════════════════════════╗
-║           🤖 HIRAKO AUTO LIKE TIKTOK BOT 🤖                 ║
+║                                                              ║
+║     ██╗  ██╗██╗██████╗  █████╗ ██╗  ██╗ ██████╗             ║
+║     ██║  ██║██║██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗            ║
+║     ███████║██║██████╔╝███████║█████╔╝ ██║   ██║            ║
+║     ██╔══██║██║██╔══██╗██╔══██║██╔═██╗ ██║   ██║            ║
+║     ██║  ██║██║██║  ██║██║  ██║██║  ██╗╚██████╔╝            ║
+║     ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝             ║
+║                                                              ║
+║        🤖 HIRAKO TIKTOK BOT - GITHUB ACTIONS 🤖             ║
 ║              ANTI-SPAM - SINGLE SHOT                        ║
 ╚══════════════════════════════════════════════════════════════╝
 \033[0m
 """
     print(banner)
+
+# ==================== GITHUB INTEGRATION ====================
+
+def save_and_commit():
+    """Save state and commit to GitHub"""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return
+    
+    try:
+        # Configure git
+        subprocess.run(['git', 'config', '--global', 'user.email', 'bot@hirako.com'], capture_output=True)
+        subprocess.run(['git', 'config', '--global', 'user.name', 'Hirako Bot'], capture_output=True)
+        
+        # Add files
+        subprocess.run(['git', 'add', LINKS_FILE, STATE_FILE], capture_output=True)
+        
+        # Commit if changes
+        result = subprocess.run(['git', 'commit', '-m', f'Auto-save: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'], 
+                               capture_output=True)
+        
+        if result.returncode == 0:
+            # Push to GitHub
+            remote_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
+            subprocess.run(['git', 'push', remote_url, 'HEAD:main'], capture_output=True)
+            print("  💾 Saved to GitHub")
+    except Exception as e:
+        print(f"  ⚠️ GitHub save error: {e}")
+
+def load_state():
+    """Load saved state"""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {"success_count": 0, "fail_count": 0, "request_count": 0, "total_likes": 0}
+
+def save_state(bot_instance):
+    """Save current state"""
+    state = {
+        "timestamp": str(datetime.now()),
+        "success_count": bot_instance.success_count,
+        "fail_count": bot_instance.fail_count,
+        "request_count": bot_instance.request_count,
+        "total_likes": bot_instance.success_count * 10
+    }
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2)
+        return True
+    except:
+        return False
 
 # ==================== MANAJEMEN VIDEO ====================
 
@@ -125,96 +176,77 @@ def clear_videos():
     return True
 
 def extract_tiktok_urls(text):
-    pattern = r'https?://(?:vt\.tiktok\.com/|www\.tiktok\.com/|tiktok\.com/)[^\s]+'
+    pattern = r'https?://(?:vt\.tiktok\.com/|www\.tiktok\.com/|tiktok\.com/|vm\.tiktok\.com/)[^\s]+'
     return re.findall(pattern, text)
 
-# ==================== PROXY LOGGER ====================
+# ==================== PROXY MANAGER ====================
 
-class ProxyLogger:
+class ProxyManager:
     def __init__(self):
-        self.used_proxies = self.load_json(PROXY_LOG_FILE)
-        self.blacklisted = self.load_json(PROXY_BLACKLIST_FILE)
+        self.proxies = []
+        self.blacklisted = set()
+        self.load_proxies()
     
-    def load_json(self, file):
-        if os.path.exists(file):
+    def load_proxies(self):
+        """Load proxies from file or use defaults"""
+        proxies_list = []
+        
+        # Try to load from file
+        if os.path.exists(PROXY_FILE):
             try:
-                with open(file, 'r') as f:
-                    return json.load(f)
+                with open(PROXY_FILE, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and ':' in line:
+                            proxies_list.append(f"http://{line}")
             except:
-                return {}
-        return {}
+                pass
+        
+        # Use defaults if no proxies found
+        if not proxies_list:
+            for proxy in DEFAULT_PROXIES:
+                proxies_list.append(f"http://{proxy}")
+        
+        # Filter blacklisted
+        self.proxies = [p for p in proxies_list if p not in self.blacklisted]
+        random.shuffle(self.proxies)
+        return len(self.proxies)
     
-    def save_json(self, file, data):
-        try:
-            with open(file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except:
-            pass
+    def get_proxy(self):
+        if not self.proxies:
+            self.load_proxies()
+            if not self.proxies:
+                return None
+        proxy = self.proxies.pop(0)
+        self.proxies.append(proxy)
+        return {'http': proxy, 'https': proxy}
     
-    def log_used(self, proxy, status, video=""):
-        if proxy not in self.used_proxies:
-            self.used_proxies[proxy] = {'count': 0, 'status': [], 'videos': []}
-        self.used_proxies[proxy]['count'] += 1
-        self.used_proxies[proxy]['status'].append({'time': str(datetime.now()), 'status': status, 'video': video})
-        if video and video not in self.used_proxies[proxy]['videos']:
-            self.used_proxies[proxy]['videos'].append(video)
-        self.save_json(PROXY_LOG_FILE, self.used_proxies)
-    
-    def blacklist(self, proxy, reason=""):
-        if proxy not in self.blacklisted:
-            self.blacklisted[proxy] = {'time': str(datetime.now()), 'reason': reason}
-        self.save_json(PROXY_BLACKLIST_FILE, self.blacklisted)
-    
-    def is_blacklisted(self, proxy):
-        return proxy in self.blacklisted
-    
-    def get_stats(self):
-        return {'used': len(self.used_proxies), 'blacklisted': len(self.blacklisted)}
+    def blacklist_proxy(self, proxy_url):
+        self.blacklisted.add(proxy_url)
+        if proxy_url in self.proxies:
+            self.proxies.remove(proxy_url)
 
 # ==================== AUTO LIKE BOT ====================
 
 class AutoLikeBot:
     def __init__(self):
-        self.proxies = []
+        self.proxy_manager = ProxyManager()
         self.request_count = 0
         self.success_count = 0
         self.fail_count = 0
-        self.logger = ProxyLogger()
-        self.is_running = True
+        self.is_running = False
         self.processing = False
         
-    def load_proxies(self):
-        proxies = []
-        if os.path.exists(PREMIUM_PROXY_FILE):
-            try:
-                with open(PREMIUM_PROXY_FILE, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and ':' in line:
-                            proxy = f"http://{line}"
-                            if not self.logger.is_blacklisted(proxy):
-                                proxies.append(proxy)
-            except:
-                pass
-        
-        if not proxies:
-            fallback = [
-                "http://45.155.221.114:80",
-                "http://45.156.196.106:80",
-                "http://194.113.111.126:80",
-            ]
-            proxies.extend(fallback)
-        
-        random.shuffle(proxies)
-        self.proxies = proxies
-        return len(proxies)
+        # Load saved state
+        saved = load_state()
+        self.success_count = saved.get('success_count', 0)
+        self.fail_count = saved.get('fail_count', 0)
+        self.request_count = saved.get('request_count', 0)
     
-    def get_proxy(self):
-        if not self.proxies:
-            return None
-        proxy = self.proxies.pop(0)
-        self.proxies.append(proxy)
-        return {'http': proxy, 'https': proxy}
+    @property
+    def total_likes(self):
+        """Property to get total likes"""
+        return self.success_count * 10
     
     def get_service_id(self, session):
         try:
@@ -235,6 +267,7 @@ class AutoLikeBot:
             return None
     
     def send_like_to_url(self, target_url):
+        """Kirim like ke URL tertentu (SINGLE SHOT)"""
         if self.processing:
             return {"success": False, "message": "Sedang memproses request lain"}
         
@@ -245,25 +278,28 @@ class AutoLikeBot:
                 self.processing = False
                 return {"success": False, "message": "URL tidak valid"}
             
-            proxy = self.get_proxy()
+            proxy = self.proxy_manager.get_proxy()
             if not proxy:
-                self.load_proxies()
-                proxy = self.get_proxy()
+                self.processing = False
+                return {"success": False, "message": "Tidak ada proxy available"}
             
             session = requests.Session()
             session.headers.update({
                 'User-Agent': random.choice(USER_AGENTS),
                 'Referer': 'https://jasatambahfollowers.com/',
                 'Origin': 'https://jasatambahfollowers.com',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'id-ID,id;q=0.9,en;q=0.8',
             })
             session.proxies = proxy
             session.verify = False
+            session.timeout = 30
             
             proxy_url = proxy.get('http', '')
             
             service_id = self.get_service_id(session)
             if not service_id:
-                self.logger.log_used(proxy_url, "FAILED", target_url)
+                self.proxy_manager.blacklist_proxy(proxy_url)
                 self.processing = False
                 return {"success": False, "message": "Gagal dapat service ID"}
             
@@ -277,23 +313,21 @@ class AutoLikeBot:
             
             text = response.text.lower()
             
-            if 'sukses' in text or 'berhasil' in text:
+            if 'sukses' in text or 'berhasil' in text or 'success' in text:
                 self.success_count += 1
                 self.request_count += 1
-                self.logger.log_used(proxy_url, "SUCCESS", target_url)
                 self.processing = False
+                save_state(self)
                 return {"success": True, "message": "✅ +10 Likes!", "url": target_url}
-            elif 'limit' in text or 'maksimal' in text or 'sudah pernah' in text:
+            elif 'limit' in text or 'maksimal' in text or 'sudah pernah' in text or 'already' in text:
                 self.fail_count += 1
                 self.request_count += 1
-                self.logger.log_used(proxy_url, "LIMIT", target_url)
-                self.logger.blacklist(proxy_url, "Limit reached")
+                self.proxy_manager.blacklist_proxy(proxy_url)
                 self.processing = False
                 return {"success": False, "message": "⚠️ Limit tercapai", "url": target_url}
             else:
                 self.fail_count += 1
                 self.request_count += 1
-                self.logger.log_used(proxy_url, "FAILED", target_url)
                 self.processing = False
                 return {"success": False, "message": "❌ Gagal", "url": target_url}
                 
@@ -310,8 +344,7 @@ class AutoLikeBot:
             "fail": self.fail_count,
             "total_likes": self.success_count * 10,
             "videos": len(load_videos()),
-            "proxies_left": len(self.proxies),
-            "proxy_stats": self.logger.get_stats()
+            "proxies_left": len(self.proxy_manager.proxies)
         }
 
 # ==================== TELEGRAM HANDLER ====================
@@ -321,8 +354,7 @@ bot_instance = None
 telegram_running = True
 
 def send_telegram(chat_id, text):
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        return False
+    """Kirim pesan ke Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
@@ -332,28 +364,23 @@ def send_telegram(chat_id, text):
         return False
 
 def get_updates():
-    """Ambil update dari Telegram dengan PERSISTENT OFFSET"""
+    """Ambil update dari Telegram"""
     global telegram_offset
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
         params = {'offset': telegram_offset, 'timeout': 25}
         r = requests.get(url, params=params, timeout=30)
         if r.status_code == 200:
-            results = r.json().get('result', [])
-            
-            # Update offset berdasarkan update_id terbaru
-            for update in results:
-                update_id = update['update_id']
-                if update_id >= telegram_offset:
-                    telegram_offset = update_id + 1
-                    save_offset(telegram_offset)  # SIMPAN KE FILE!
-                    print(f"  💾 Offset saved: {telegram_offset}")
-            
-            return results
+            return r.json().get('result', [])
         return []
-    except Exception as e:
-        print(f"  ⚠️ Get updates error: {e}")
+    except:
         return []
+
+def is_message_processed(message_id):
+    if message_id in processed_messages:
+        return True
+    processed_messages.append(message_id)
+    return False
 
 def handle_message(msg):
     global bot_instance
@@ -363,51 +390,56 @@ def handle_message(msg):
     message_id = msg['message_id']
     text = msg.get('text', '').strip()
     
-    # Cek admin
     if user_id != TELEGRAM_ADMIN_ID:
         send_telegram(chat_id, "❌ Akses ditolak!")
         return
     
-    # Anti-spam berdasarkan message_id
-    if message_id in processed_messages:
-        print(f"  ⏭️ Skip message {message_id} (sudah diproses)")
+    if is_message_processed(message_id):
         return
-    processed_messages.append(message_id)
     
-    print(f"  📨 Process message {message_id}: {text[:50] if text else '(empty)'}")
+    print(f"  📨 Process: {text[:50] if text else '(empty)'}")
     
-    # ========== SINGLE SHOT ==========
+    # SINGLE SHOT - Kirim link langsung
     if text and not text.startswith('/'):
         tiktok_urls = extract_tiktok_urls(text)
         if tiktok_urls:
-            send_telegram(chat_id, f"🎯 *SINGLE SHOT!*\n📹 Memproses {len(tiktok_urls)} link...")
+            send_telegram(chat_id, f"🎯 *HIRAKO SINGLE SHOT!*\n📹 Memproses {len(tiktok_urls)} link...")
             
             results = []
             for i, url in enumerate(tiktok_urls):
-                send_telegram(chat_id, f"🔄 [{i+1}/{len(tiktok_urls)}] Memproses...")
+                send_telegram(chat_id, f"🔄 [{i+1}/{len(tiktok_urls)}] Like ke:\n`{url[:50]}...`")
                 result = bot_instance.send_like_to_url(url)
                 time.sleep(2)
                 results.append(result)
             
             success_count = sum(1 for r in results if r['success'])
             
-            if success_count > 0:
-                summary = f"✅ *BERHASIL!*\n✅ Berhasil: *{success_count}* like\n📈 Total Like: *{success_count * 10}* likes"
-            else:
-                summary = f"❌ *GAGAL!*\n{results[0]['message'] if results else 'Error'}"
+            summary = f"✅ *HIRAKO - HASIL SINGLE SHOT*\n\n"
+            summary += f"✅ Berhasil: *{success_count}* like\n"
+            summary += f"📈 Total Like: *{success_count * 10}* likes\n\n"
+            
+            for r in results:
+                if r['success']:
+                    summary += f"✅ `{r['url'][:40]}...` → +10 Likes!\n"
+                else:
+                    summary += f"❌ `{r['url'][:40]}...` → {r['message'][:30]}\n"
             
             send_telegram(chat_id, summary)
+            save_state(bot_instance)
+            save_and_commit()
             return
     
-    # ========== COMMANDS ==========
-    
+    # COMMANDS
     if text == '/start':
         stats = bot_instance.get_stats()
-        menu = f"""🤖 *HIRAKO TIKTOK BOT*
+        menu = f"""🤖 *HIRAKO TIKTOK BOT - GITHUB EDITION*
+
+🎯 *SINGLE SHOT MODE:*
+Kirim link TikTok → langsung like!
 
 📊 *STATUS:*
+✅ Total Like: *{stats['total_likes']}* likes
 📹 Video: *{stats['videos']}*
-✅ Total Like: *{stats['total_likes']}*
 
 📋 *PERINTAH:*
 /start - Menu ini
@@ -417,149 +449,122 @@ def handle_message(msg):
 /clear - Hapus semua
 /status - Cek status
 /stats - Statistik
-/skip - Skip semua pesan lama
-/help - Bantuan
 
-💡 *Kirim link TikTok langsung!*"""
+🔥 *HIRAKO BOT* - 24/7 Active"""
         send_telegram(chat_id, menu)
     
-    elif text == '/help':
-        help_msg = """📖 *PANDUAN BOT*
+    elif text == '/status':
+        stats = bot_instance.get_stats()
+        msg = f"""📊 *HIRAKO BOT STATUS*
 
-🎯 *SINGLE SHOT*
-Kirim link TikTok → langsung like!
+✅ Sukses: *{stats['success']}* likes
+❌ Gagal: *{stats['fail']}* request
+📈 Total: *{stats['total_likes']}* likes
+📹 Video: *{stats['videos']}*
+🌐 Proxy: *{stats['proxies_left']}* active
 
-📹 *MANAJEMEN VIDEO*
-/add url - Tambah video
-/list - Lihat semua
-/remove 1 - Hapus nomor 1
-/clear - Hapus semua
-
-🛠️ *UTILITY*
-/skip - Skip semua pesan lama (STOP SPAM!)
-/status - Status bot
-/stats - Statistik lengkap
-
-🔥 *HIRAKO BOT*"""
-        send_telegram(chat_id, help_msg)
+💡 Kirim link untuk single shot!"""
+        send_telegram(chat_id, msg)
     
-    elif text == '/skip':
-        global telegram_offset
-        telegram_offset = 999999999
-        save_offset(telegram_offset)
-        send_telegram(chat_id, "✅ *BERHASIL SKIP SEMUA PESAN LAMA!*\n\nBot sekarang hanya akan membaca pesan baru.\n\nRestart bot jika perlu.")
+    elif text == '/stats':
+        stats = bot_instance.get_stats()
+        msg = f"""📈 *HIRAKO STATISTIK*
+
+*Total Performance:*
+✅ Success: *{stats['success']}*
+❌ Failed: *{stats['fail']}*
+📈 Total Likes: *{stats['total_likes']}*
+📡 Requests: *{stats['request']}*
+
+*System:*
+📹 Videos: *{stats['videos']}*
+🌐 Proxies: *{stats['proxies_left']}*
+
+🔥 *HIRAKO BOT - Always Online*"""
+        send_telegram(chat_id, msg)
     
     elif text.startswith('/add'):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_telegram(chat_id, "❌ Gunakan: /add <url>")
+            send_telegram(chat_id, "❌ /add <url>")
             return
-        
-        urls_input = parts[1].strip()
-        tiktok_urls = extract_tiktok_urls(urls_input)
-        
-        if not tiktok_urls:
-            send_telegram(chat_id, "❌ Tidak ada link TikTok valid!")
+        urls = extract_tiktok_urls(parts[1])
+        if not urls:
+            send_telegram(chat_id, "❌ URL tidak valid")
             return
-        
         added = 0
-        for url in tiktok_urls:
+        for url in urls:
             success, total = add_video(url)
             if success:
                 added += 1
-        
-        send_telegram(chat_id, f"✅ Berhasil menambah *{added}* video!\n📹 Total: *{total}* video")
+        send_telegram(chat_id, f"✅ Added *{added}* video! Total: *{total}*")
+        save_and_commit()
     
     elif text == '/list':
         videos = load_videos()
         if not videos:
-            send_telegram(chat_id, "📹 *Belum ada video!*")
+            send_telegram(chat_id, "📹 No videos")
             return
-        
-        msg = f"📹 *DAFTAR VIDEO ({len(videos)}):*\n\n"
-        for i, url in enumerate(videos, 1):
-            short = url[:50] + "..." if len(url) > 50 else url
-            msg += f"{i}. {short}\n"
-            if len(msg) > 3500:
-                msg += f"\n... dan {len(videos)-i} video lainnya"
-                break
+        msg = f"📹 *VIDEOS ({len(videos)}):*\n"
+        for i, url in enumerate(videos[:10], 1):
+            msg += f"{i}. {url[:40]}...\n"
         send_telegram(chat_id, msg)
     
     elif text.startswith('/remove'):
         parts = text.split()
         if len(parts) < 2:
-            send_telegram(chat_id, "❌ Gunakan: /remove <nomor>")
+            send_telegram(chat_id, "❌ /remove <number>")
             return
-        
         try:
             index = int(parts[1])
             success, removed, total = remove_video(index)
             if success:
-                send_telegram(chat_id, f"✅ Hapus video nomor *{index}*\n📹 Sisa: *{total}* video")
+                send_telegram(chat_id, f"✅ Removed video {index}")
+                save_and_commit()
             else:
-                send_telegram(chat_id, f"❌ Nomor *{index}* tidak valid!")
-        except ValueError:
-            send_telegram(chat_id, "❌ Masukkan nomor yang valid!")
+                send_telegram(chat_id, f"❌ Invalid number")
+        except:
+            send_telegram(chat_id, "❌ Invalid number")
     
     elif text == '/clear':
-        videos = load_videos()
-        if not videos:
-            send_telegram(chat_id, "📹 Tidak ada video!")
-            return
-        
+        count = len(load_videos())
         clear_videos()
-        send_telegram(chat_id, f"🗑️ *Semua video dihapus!* ({len(videos)} video)")
+        send_telegram(chat_id, f"🗑️ Cleared {count} videos")
+        save_and_commit()
     
-    elif text == '/status':
-        stats = bot_instance.get_stats()
-        msg = f"""📊 *STATUS BOT*
+    elif text == '/help':
+        help_msg = """📖 *HIRAKO BOT HELP*
 
-✅ Sukses: *{stats['success']}* likes
-❌ Gagal: *{stats['fail']}* request
-📈 Total: *{stats['total_likes']}* likes
-🌐 Proxy: *{stats['proxies_left']}* tersisa
-📌 Offset: `{telegram_offset}`"""
-        send_telegram(chat_id, msg)
-    
-    elif text == '/stats':
-        stats = bot_instance.get_stats()
-        proxy_stats = stats['proxy_stats']
-        
-        msg = f"""📈 *STATISTIK LENGKAP*
+🎯 *SINGLE SHOT:* Kirim link TikTok langsung!
+📹 *ADD:* /add https://tiktok.com/xxx
+📋 *LIST:* /list
+🗑️ *REMOVE:* /remove 1
+🧹 *CLEAR:* /clear
+📊 *STATUS:* /status
+📈 *STATS:* /stats
 
-✅ Sukses: *{stats['success']}* likes
-❌ Gagal: *{stats['fail']}* request
-📈 Total: *{stats['total_likes']}* likes
-
-📝 Proxy dipakai: *{proxy_stats['used']}*
-🚫 Blacklist: *{proxy_stats['blacklisted']}*
-📡 Sisa: *{stats['proxies_left']}*
-
-📌 Offset: `{telegram_offset}`"""
-        send_telegram(chat_id, msg)
+🔥 *HIRAKO - Auto Like TikTok Bot*"""
+        send_telegram(chat_id, help_msg)
     
     elif text.startswith('/'):
-        send_telegram(chat_id, f"❌ Perintah tidak dikenal!\nKetik /help")
-    
-    elif text:
-        send_telegram(chat_id, f"💡 *Kirim link TikTok untuk like!*\nContoh: `https://vt.tiktok.com/xxx`")
+        send_telegram(chat_id, f"❌ Unknown command. Use /help")
 
 def telegram_worker():
-    global telegram_offset
-    time.sleep(2)
+    send_telegram(TELEGRAM_ADMIN_ID, """✅ *HIRAKO BOT ONLINE - GITHUB ACTIONS*
+
+🎯 *SINGLE SHOT READY*
+Cukup kirim link TikTok, bot akan like!
+
+📋 *Commands:*
+/start - Menu
+/status - Status
+/stats - Statistics
+/help - Help
+
+🔥 *24/7 Active on GitHub*""")
     
-    send_telegram(TELEGRAM_ADMIN_ID, f"""✅ *HIRAKO BOT ONLINE!*
-
-📌 *Current Offset:* `{telegram_offset}`
-
-🛠️ *Jika bot masih spam pesan lama, kirim:*
-`/skip`
-
-💡 *Kirim link TikTok langsung untuk like!*""")
-    
-    print(f"\n✅ Telegram Bot Connected!")
-    print(f"   📌 Current Offset: {telegram_offset}")
-    print(f"   💾 Offset file: {OFFSET_FILE}")
+    print("\n✅ HIRAKO Telegram Bot Connected!")
+    print("   🎯 Single Shot Mode Active")
     
     while telegram_running:
         try:
@@ -567,6 +572,7 @@ def telegram_worker():
             for update in updates:
                 if 'message' in update:
                     handle_message(update['message'])
+                telegram_offset = update['update_id'] + 1
             time.sleep(1)
         except Exception as e:
             print(f"  ⚠️ Error: {e}")
@@ -575,41 +581,61 @@ def telegram_worker():
 # ==================== MAIN ====================
 
 def main():
-    global bot_instance, telegram_running, telegram_offset
+    global bot_instance, telegram_running
     
     show_banner()
     
-    print("="*55)
-    print("     🤖 HIRAKO SINGLE SHOT BOT 🤖")
+    print("\033[93m" + "="*55)
+    print("     🤖 HIRAKO GITHUB ACTIONS BOT 🤖")
+    print("="*55 + "\033[0m")
+    print("\033[96m   🎯 SINGLE SHOT MODE")
+    print("   ✅ Auto-Save to GitHub")
+    print("   ✅ 24/7 Support\033[0m")
     print("="*55)
     
-    # LOAD OFFSET YANG TERSIMPAN
-    telegram_offset = load_offset()
-    print(f"\n📌 Load offset from file: {telegram_offset}")
+    # Load data
+    videos = load_videos()
+    print(f"\n\033[92m📹 Loaded {len(videos)} videos\033[0m")
     
-    # Buat instance bot
+    # Create bot instance
     bot_instance = AutoLikeBot()
-    bot_instance.load_proxies()
+    print(f"\033[92m✅ Previous stats: {bot_instance.total_likes} total likes\033[0m")
     
-    # Start Telegram thread
-    print("\n🤟 Menghubungkan ke Telegram...")
+    # Start Telegram
+    print("\n\033[96m🤟 Connecting to Telegram...\033[0m")
     telegram_thread = threading.Thread(target=telegram_worker, daemon=True)
     telegram_thread.start()
     
-    print("\n✅ BOT AKTIF!")
-    print("📱 Buka Telegram dan kirim /skip untuk skip pesan lama")
-    print("\nTekan Ctrl+C untuk menghentikan bot\n")
+    print("\n\033[92m✅ HIRAKO BOT ACTIVE!\033[0m")
+    print("\033[96m📱 Send TikTok link to Telegram for single shot!\033[0m")
+    print("\n\033[93m💡 Bot will auto-save to GitHub\033[0m")
+    print("\033[93m🔧 Press Ctrl+C to stop\033[0m")
     print("="*55)
+    
+    # Auto-save every 5 minutes
+    last_save = time.time()
     
     try:
         while True:
             time.sleep(1)
+            
+            # Auto-save every 5 minutes
+            if time.time() - last_save > 300:
+                save_state(bot_instance)
+                save_and_commit()
+                last_save = time.time()
+                
     except KeyboardInterrupt:
         telegram_running = False
-        print("\n\n📊 STATISTIK FINAL")
-        print(f"   ✅ Sukses: {bot_instance.success_count} likes")
-        print(f"   📌 Final Offset: {telegram_offset}")
-        print("\n👋 Bot dihentikan.\n")
+        print("\n\n\033[93m" + "="*55)
+        print("         📊 HIRAKO FINAL STATISTICS")
+        print("="*55 + "\033[0m")
+        if bot_instance:
+            print(f"\033[96m   ✅ Success: {bot_instance.success_count} likes\033[0m")
+            print(f"\033[96m   📈 Total: {bot_instance.success_count * 10} likes\033[0m")
+        print("\033[93m" + "="*55 + "\033[0m")
+        print("\n\033[95m👋 HIRAKO Bot Stopped\033[0m")
+        print("\033[96m   Created by HIRAKO | GitHub Actions Ready\033[0m\n")
 
 if __name__ == "__main__":
     main()
