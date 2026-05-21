@@ -4,6 +4,7 @@ HIRAKO AUTO LIKE TIKTOK BOT - GITHUB ACTIONS READY (FIXED)
 - Support GitHub Actions 24/7
 - Auto commit & save state
 - No spam - Single shot langsung like sekali
+- FIXED: Hardcoded service ID untuk like gratis
 """
 
 import requests
@@ -29,10 +30,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TELEGRAM_BOT_TOKEN = "8794092200:AAETRBGzQjUhGc2Ot-_QJBB42PwEtcYie4Q"
 TELEGRAM_ADMIN_ID = 8440381121
 
+# SERVICE ID UNTUK LIKE GRATIS (Hardcode dari hasil cek)
+# Service ID 31 = "Tiktok Likes Gratis!"
+TIKTOK_LIKE_SERVICE_ID = "31"
+
 # File untuk menyimpan data
 LINKS_FILE = "links.txt"
 STATE_FILE = "bot_state.json"
 PROXY_FILE = "proxy1.txt"
+OFFSET_FILE = "telegram_offset.json"  # Untuk menyimpan offset
 
 # GitHub config
 GITHUB_REPO = os.environ.get('GITHUB_REPOSITORY', '')
@@ -45,6 +51,10 @@ DEFAULT_PROXIES = [
     "194.113.111.126:80",
     "103.152.232.156:80",
     "139.162.78.109:3128",
+    # Tambah proxy fresh
+    "20.111.54.16:8123",
+    "20.235.159.154:80",
+    "42.115.37.202:8080",
 ]
 
 # Rate limiting
@@ -56,6 +66,28 @@ USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/119.0.0.0',
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/118.0.0.0',
 ]
+
+# ==================== PERSISTENT OFFSET ====================
+
+def save_offset(offset):
+    """Simpan offset ke file"""
+    try:
+        with open(OFFSET_FILE, 'w') as f:
+            json.dump({'offset': offset}, f)
+        return True
+    except:
+        return False
+
+def load_offset():
+    """Load offset dari file"""
+    if os.path.exists(OFFSET_FILE):
+        try:
+            with open(OFFSET_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get('offset', 0)
+        except:
+            return 0
+    return 0
 
 # ==================== BANNER ====================
 
@@ -86,19 +118,14 @@ def save_and_commit():
         return
     
     try:
-        # Configure git
         subprocess.run(['git', 'config', '--global', 'user.email', 'bot@hirako.com'], capture_output=True)
         subprocess.run(['git', 'config', '--global', 'user.name', 'Hirako Bot'], capture_output=True)
+        subprocess.run(['git', 'add', LINKS_FILE, STATE_FILE, OFFSET_FILE], capture_output=True)
         
-        # Add files
-        subprocess.run(['git', 'add', LINKS_FILE, STATE_FILE], capture_output=True)
-        
-        # Commit if changes
         result = subprocess.run(['git', 'commit', '-m', f'Auto-save: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'], 
                                capture_output=True)
         
         if result.returncode == 0:
-            # Push to GitHub
             remote_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
             subprocess.run(['git', 'push', remote_url, 'HEAD:main'], capture_output=True)
             print("  💾 Saved to GitHub")
@@ -191,7 +218,6 @@ class ProxyManager:
         """Load proxies from file or use defaults"""
         proxies_list = []
         
-        # Try to load from file
         if os.path.exists(PROXY_FILE):
             try:
                 with open(PROXY_FILE, 'r') as f:
@@ -202,12 +228,10 @@ class ProxyManager:
             except:
                 pass
         
-        # Use defaults if no proxies found
         if not proxies_list:
             for proxy in DEFAULT_PROXIES:
                 proxies_list.append(f"http://{proxy}")
         
-        # Filter blacklisted
         self.proxies = [p for p in proxies_list if p not in self.blacklisted]
         random.shuffle(self.proxies)
         return len(self.proxies)
@@ -237,7 +261,6 @@ class AutoLikeBot:
         self.is_running = False
         self.processing = False
         
-        # Load saved state
         saved = load_state()
         self.success_count = saved.get('success_count', 0)
         self.fail_count = saved.get('fail_count', 0)
@@ -245,29 +268,10 @@ class AutoLikeBot:
     
     @property
     def total_likes(self):
-        """Property to get total likes"""
         return self.success_count * 10
     
-    def get_service_id(self, session):
-        try:
-            response = session.post(
-                'https://jasatambahfollowers.com/ajax/order/services.php',
-                data={'category': 'tiktok'},
-                headers={'X-Requested-With': 'XMLHttpRequest'},
-                timeout=15,
-                verify=False
-            )
-            soup = BeautifulSoup(response.text, 'html.parser')
-            for option in soup.find_all('option'):
-                text = option.text.lower()
-                if 'like' in text and ('gratis' in text or 'free' in text):
-                    return option.get('value')
-            return None
-        except:
-            return None
-    
     def send_like_to_url(self, target_url):
-        """Kirim like ke URL tertentu (SINGLE SHOT)"""
+        """Kirim like ke URL tertentu (SINGLE SHOT) - FIXED dengan hardcoded service ID"""
         if self.processing:
             return {"success": False, "message": "Sedang memproses request lain"}
         
@@ -290,6 +294,7 @@ class AutoLikeBot:
                 'Origin': 'https://jasatambahfollowers.com',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'id-ID,id;q=0.9,en;q=0.8',
+                'Content-Type': 'application/x-www-form-urlencoded',
             })
             session.proxies = proxy
             session.verify = False
@@ -297,43 +302,65 @@ class AutoLikeBot:
             
             proxy_url = proxy.get('http', '')
             
-            service_id = self.get_service_id(session)
-            if not service_id:
-                self.proxy_manager.blacklist_proxy(proxy_url)
-                self.processing = False
-                return {"success": False, "message": "Gagal dapat service ID"}
+            # FIRST: GET home page to get cookies
+            try:
+                session.get('https://jasatambahfollowers.com/', timeout=15)
+                time.sleep(1)
+            except:
+                pass
             
+            # USE HARDCODED SERVICE ID (dari hasil cek: 31 = Tiktok Likes Gratis!)
+            service_id = TIKTOK_LIKE_SERVICE_ID
+            print(f"  🎯 Using service ID: {service_id} (Tiktok Likes Gratis!)")
+            
+            # Kirim request like
             response = session.post(
                 'https://jasatambahfollowers.com/',
-                data={'service': service_id, 'target': target_url, 'jumlah': '10'},
+                data={
+                    'service': service_id, 
+                    'target': target_url, 
+                    'jumlah': '10'
+                },
                 timeout=20,
                 allow_redirects=True,
                 verify=False
             )
             
             text = response.text.lower()
+            print(f"  📡 Response: {text[:200]}")  # Debug
             
+            # Cek berbagai kemungkinan response
             if 'sukses' in text or 'berhasil' in text or 'success' in text:
                 self.success_count += 1
                 self.request_count += 1
                 self.processing = False
                 save_state(self)
+                print(f"  ✅ SUCCESS! +10 Likes untuk {target_url[:50]}")
                 return {"success": True, "message": "✅ +10 Likes!", "url": target_url}
             elif 'limit' in text or 'maksimal' in text or 'sudah pernah' in text or 'already' in text:
                 self.fail_count += 1
                 self.request_count += 1
                 self.proxy_manager.blacklist_proxy(proxy_url)
                 self.processing = False
-                return {"success": False, "message": "⚠️ Limit tercapai", "url": target_url}
+                print(f"  ⚠️ LIMIT: {target_url[:50]}")
+                return {"success": False, "message": "⚠️ Limit tercapai (video sudah pernah di-like)", "url": target_url}
+            elif 'service' in text and 'tidak' in text:
+                self.fail_count += 1
+                self.request_count += 1
+                self.processing = False
+                print(f"  ❌ SERVICE ERROR: {text[:100]}")
+                return {"success": False, "message": "❌ Service sedang error", "url": target_url}
             else:
                 self.fail_count += 1
                 self.request_count += 1
                 self.processing = False
+                print(f"  ❌ FAILED: {text[:100]}")
                 return {"success": False, "message": "❌ Gagal", "url": target_url}
                 
         except Exception as e:
             self.fail_count += 1
             self.processing = False
+            print(f"  ❌ ERROR: {str(e)}")
             return {"success": False, "message": f"❌ Error: {str(e)[:30]}", "url": target_url}
     
     def get_stats(self):
@@ -364,14 +391,20 @@ def send_telegram(chat_id, text):
         return False
 
 def get_updates():
-    """Ambil update dari Telegram"""
+    """Ambil update dari Telegram dengan persistent offset"""
     global telegram_offset
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
         params = {'offset': telegram_offset, 'timeout': 25}
         r = requests.get(url, params=params, timeout=30)
         if r.status_code == 200:
-            return r.json().get('result', [])
+            results = r.json().get('result', [])
+            for update in results:
+                update_id = update['update_id']
+                if update_id >= telegram_offset:
+                    telegram_offset = update_id + 1
+                    save_offset(telegram_offset)
+            return results
         return []
     except:
         return []
@@ -398,6 +431,14 @@ def handle_message(msg):
         return
     
     print(f"  📨 Process: {text[:50] if text else '(empty)'}")
+    
+    # COMMAND SKIP (untuk skip pesan lama)
+    if text == '/skip':
+        global telegram_offset
+        telegram_offset = 999999999
+        save_offset(telegram_offset)
+        send_telegram(chat_id, "✅ *BERHASIL SKIP SEMUA PESAN LAMA!*\n\nBot sekarang hanya akan membaca pesan baru.")
+        return
     
     # SINGLE SHOT - Kirim link langsung
     if text and not text.startswith('/'):
@@ -432,7 +473,7 @@ def handle_message(msg):
     # COMMANDS
     if text == '/start':
         stats = bot_instance.get_stats()
-        menu = f"""🤖 *HIRAKO TIKTOK BOT - GITHUB EDITION*
+        menu = f"""🤖 *HIRAKO TIKTOK BOT*
 
 🎯 *SINGLE SHOT MODE:*
 Kirim link TikTok → langsung like!
@@ -449,6 +490,7 @@ Kirim link TikTok → langsung like!
 /clear - Hapus semua
 /status - Cek status
 /stats - Statistik
+/skip - Skip pesan lama
 
 🔥 *HIRAKO BOT* - 24/7 Active"""
         send_telegram(chat_id, menu)
@@ -462,6 +504,7 @@ Kirim link TikTok → langsung like!
 📈 Total: *{stats['total_likes']}* likes
 📹 Video: *{stats['videos']}*
 🌐 Proxy: *{stats['proxies_left']}* active
+📌 Offset: `{telegram_offset}`
 
 💡 Kirim link untuk single shot!"""
         send_telegram(chat_id, msg)
@@ -479,6 +522,7 @@ Kirim link TikTok → langsung like!
 *System:*
 📹 Videos: *{stats['videos']}*
 🌐 Proxies: *{stats['proxies_left']}*
+📌 Offset: `{telegram_offset}`
 
 🔥 *HIRAKO BOT - Always Online*"""
         send_telegram(chat_id, msg)
@@ -542,6 +586,7 @@ Kirim link TikTok → langsung like!
 🧹 *CLEAR:* /clear
 📊 *STATUS:* /status
 📈 *STATS:* /stats
+🛠️ *SKIP:* /skip (skip pesan lama)
 
 🔥 *HIRAKO - Auto Like TikTok Bot*"""
         send_telegram(chat_id, help_msg)
@@ -550,20 +595,33 @@ Kirim link TikTok → langsung like!
         send_telegram(chat_id, f"❌ Unknown command. Use /help")
 
 def telegram_worker():
-    send_telegram(TELEGRAM_ADMIN_ID, """✅ *HIRAKO BOT ONLINE - GITHUB ACTIONS*
+    global telegram_offset
+    
+    time.sleep(2)
+    
+    send_telegram(TELEGRAM_ADMIN_ID, f"""✅ *HIRAKO BOT ONLINE*
 
 🎯 *SINGLE SHOT READY*
 Cukup kirim link TikTok, bot akan like!
+
+📌 *Service ID:* {TIKTOK_LIKE_SERVICE_ID} (Tiktok Likes Gratis!)
+📌 *Current Offset:* `{telegram_offset}`
+
+🛠️ *Jika bot membaca pesan lama, kirim:*
+`/skip`
 
 📋 *Commands:*
 /start - Menu
 /status - Status
 /stats - Statistics
+/skip - Skip pesan lama
 /help - Help
 
 🔥 *24/7 Active on GitHub*""")
     
-    print("\n✅ HIRAKO Telegram Bot Connected!")
+    print(f"\n✅ HIRAKO Telegram Bot Connected!")
+    print(f"   🎯 Service ID: {TIKTOK_LIKE_SERVICE_ID} (Tiktok Likes Gratis!)")
+    print(f"   📌 Current Offset: {telegram_offset}")
     print("   🎯 Single Shot Mode Active")
     
     while telegram_running:
@@ -572,7 +630,6 @@ Cukup kirim link TikTok, bot akan like!
             for update in updates:
                 if 'message' in update:
                     handle_message(update['message'])
-                telegram_offset = update['update_id'] + 1
             time.sleep(1)
         except Exception as e:
             print(f"  ⚠️ Error: {e}")
@@ -581,21 +638,26 @@ Cukup kirim link TikTok, bot akan like!
 # ==================== MAIN ====================
 
 def main():
-    global bot_instance, telegram_running
+    global bot_instance, telegram_running, telegram_offset
     
     show_banner()
     
     print("\033[93m" + "="*55)
-    print("     🤖 HIRAKO GITHUB ACTIONS BOT 🤖")
+    print("     🤖 HIRAKO BOT 🤖")
     print("="*55 + "\033[0m")
     print("\033[96m   🎯 SINGLE SHOT MODE")
-    print("   ✅ Auto-Save to GitHub")
-    print("   ✅ 24/7 Support\033[0m")
+    print("   ✅ Auto-Save")
+    print("   ✅ 24/7 Support")
+    print(f"   🎯 Service ID: {TIKTOK_LIKE_SERVICE_ID} (Tiktok Likes Gratis!)\033[0m")
     print("="*55)
+    
+    # Load offset
+    telegram_offset = load_offset()
+    print(f"\n\033[92m📌 Load offset: {telegram_offset}\033[0m")
     
     # Load data
     videos = load_videos()
-    print(f"\n\033[92m📹 Loaded {len(videos)} videos\033[0m")
+    print(f"\033[92m📹 Loaded {len(videos)} videos\033[0m")
     
     # Create bot instance
     bot_instance = AutoLikeBot()
@@ -609,6 +671,7 @@ def main():
     print("\n\033[92m✅ HIRAKO BOT ACTIVE!\033[0m")
     print("\033[96m📱 Send TikTok link to Telegram for single shot!\033[0m")
     print("\n\033[93m💡 Bot will auto-save to GitHub\033[0m")
+    print("\033[93m🛠️ Kirim /skip jika bot membaca pesan lama!\033[0m")
     print("\033[93m🔧 Press Ctrl+C to stop\033[0m")
     print("="*55)
     
@@ -619,7 +682,6 @@ def main():
         while True:
             time.sleep(1)
             
-            # Auto-save every 5 minutes
             if time.time() - last_save > 300:
                 save_state(bot_instance)
                 save_and_commit()
@@ -633,9 +695,10 @@ def main():
         if bot_instance:
             print(f"\033[96m   ✅ Success: {bot_instance.success_count} likes\033[0m")
             print(f"\033[96m   📈 Total: {bot_instance.success_count * 10} likes\033[0m")
+            print(f"\033[96m   📌 Final Offset: {telegram_offset}\033[0m")
         print("\033[93m" + "="*55 + "\033[0m")
         print("\n\033[95m👋 HIRAKO Bot Stopped\033[0m")
-        print("\033[96m   Created by HIRAKO | GitHub Actions Ready\033[0m\n")
+        print("\033[96m   Created by HIRAKO | Actions Ready\033[0m\n")
 
 if __name__ == "__main__":
     main()
