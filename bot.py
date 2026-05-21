@@ -25,7 +25,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==================== KONFIGURASI ====================
 
 # 🔥 GANTI DENGAN DATA TELEGRAM KAMU 🔥
-TELEGRAM_BOT_TOKEN = "8794092200:AAFgbuxPLGkUzLhFgFAp0q8plYl9AxmDAig"  # Token dari @BotFather
+TELEGRAM_BOT_TOKEN = "8794092200:AAETRBGzQjUhGc2Ot-_QJBB42PwEtcYie4Q"  # Token dari @BotFather
 TELEGRAM_ADMIN_ID = 8440381121  # ID Telegram kamu (angka)
 
 # File untuk menyimpan video
