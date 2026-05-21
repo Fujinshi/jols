@@ -21,48 +21,19 @@ from bs4 import BeautifulSoup
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ==================== FLY.IO PERSISTENT STORAGE ====================
-# KODE INI DITAMBAHKAN UNTUK FLY.IO DEPLOYMENT
-import os
-
-# Pindahkan semua file ke direktori /app/data (persistent)
-DATA_DIR = "/app/data" if os.path.exists("/app") else "."
-
-# Update path file
-LINKS_FILE = os.path.join(DATA_DIR, "links.txt")
-PREMIUM_PROXY_FILE = os.path.join(DATA_DIR, "proxy1.txt")
-PROXY_LOG_FILE = os.path.join(DATA_DIR, "used_proxies.json")
-PROXY_BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklisted_proxies.json")
-
-# Buat direktori jika belum ada
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-
-# Pindahkan file lama jika ada
-for file in ["links.txt", "proxy1.txt", "used_proxies.json", "blacklisted_proxies.json"]:
-    old_path = file
-    new_path = os.path.join(DATA_DIR, file)
-    if os.path.exists(old_path) and not os.path.exists(new_path):
-        try:
-            os.rename(old_path, new_path)
-            print(f"✅ Migrated {file} to {new_path}")
-        except:
-            pass
-
-print(f"📁 Data directory: {DATA_DIR}")
-# ==================== END PERSISTENT STORAGE ====================
-
 # ==================== KONFIGURASI ====================
 
 # 🔥 GANTI DENGAN DATA TELEGRAM KAMU 🔥
 TELEGRAM_BOT_TOKEN = "8794092200:AAFgbuxPLGkUzLhFgFAp0q8plYl9AxmDAig"  # Token dari @BotFather
 TELEGRAM_ADMIN_ID = 8440381121  # ID Telegram kamu (angka)
 
-# File untuk menyimpan video - SUDAH DIUPDATE DI ATAS
-# LINKS_FILE sudah didefinisikan di persistent storage
+# File untuk menyimpan video
+LINKS_FILE = "links.txt"
 
-# File untuk proxy - SUDAH DIUPDATE DI ATAS
-# PREMIUM_PROXY_FILE, PROXY_LOG_FILE, PROXY_BLACKLIST_FILE sudah didefinisikan
+# File untuk proxy
+PREMIUM_PROXY_FILE = "proxy1.txt"
+PROXY_LOG_FILE = "used_proxies.json"
+PROXY_BLACKLIST_FILE = "blacklisted_proxies.json"
 
 # Rate limiting
 MESSAGE_COOLDOWN = 3  # detik
